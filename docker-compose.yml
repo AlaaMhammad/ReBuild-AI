@@ -1,0 +1,64 @@
+# Local development & CI services for ReBuild AI.
+#   docker compose up -d postgres redis
+#   docker compose run --rm app php artisan migrate
+#   docker compose run --rm app php artisan test
+name: rebuild-ai
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: rebuild
+      POSTGRES_USER: rebuild
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-rebuild-local-only}
+    ports:
+      - "${FORWARD_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/docker/postgres/20-create-testing-database.sql:/docker-entrypoint-initdb.d/20-create-testing-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rebuild -d rebuild"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${FORWARD_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ./backend
+      dockerfile: docker/php/Dockerfile
+    working_dir: /var/www/html
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: rebuild
+      DB_USERNAME: rebuild
+      DB_PASSWORD: ${DB_PASSWORD:-rebuild-local-only}
+      REDIS_HOST: redis
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
