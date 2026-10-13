@@ -58,6 +58,42 @@ return [
 
     'media' => [
         'disk' => env('ASSESSMENT_MEDIA_DISK', 'local'),
+
+        'allowed_mime_types' => ['image/jpeg', 'image/png', 'image/webp'],
+
+        // Decoded size limit for one image, whether sent inline (base64) or via
+        // the binary upload endpoint. Field apps should resize before sending.
+        'max_image_bytes' => (int) env('SYNC_MAX_IMAGE_BYTES', 8 * 1024 * 1024),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Offline Sync
+    |--------------------------------------------------------------------------
+    */
+
+    'sync' => [
+        // Maximum number of records (beneficiaries + assessments + images) in one batch.
+        'max_items_per_batch' => (int) env('SYNC_MAX_ITEMS_PER_BATCH', 500),
+
+        // Inline base64 images are capped separately: they inflate the request
+        // by ~33% and a dropped connection forces the whole batch to be resent.
+        'max_inline_images_per_batch' => (int) env('SYNC_MAX_INLINE_IMAGES_PER_BATCH', 10),
+        'max_inline_image_bytes' => (int) env('SYNC_MAX_INLINE_IMAGE_BYTES', 2 * 1024 * 1024),
+
+        // How long a batch's idempotency lock is held while it is ingested.
+        'lock_seconds' => (int) env('SYNC_LOCK_SECONDS', 120),
+
+        // Device timestamps later than server time (after skew correction) by
+        // more than this are clamped to the receive time and reported as warnings.
+        'future_timestamp_tolerance_seconds' => (int) env('SYNC_FUTURE_TOLERANCE_SECONDS', 300),
+
+        'queue' => env('SYNC_QUEUE', 'sync'),
+        'media_queue' => env('SYNC_MEDIA_QUEUE', 'media'),
+    ],
+
+    'horizon' => [
+        'allowed_emails' => env('HORIZON_ALLOWED_EMAILS', ''),
     ],
 
 ];

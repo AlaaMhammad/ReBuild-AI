@@ -1,0 +1,333 @@
+{
+  "info": {
+    "_postman_id": "6a7c1f0e-2b9d-4c55-8e31-0f4b7d2a9c10",
+    "name": "ReBuild AI API v1",
+    "description": "Authentication, administration and offline-sync endpoints of the ReBuild AI API.\n\nSetup:\n1. Set `baseUrl`, `email`, `password` and `deviceId` in the collection variables.\n2. Run **Auth / Login (field device)**: the token is stored in `token` automatically.\n3. Run **Sync / Push batch**: fresh `idempotencyKey`, `assessmentClientUuid` and `imageClientUuid` values are generated, and the body is saved so **Replay last batch** can resend it byte-for-byte.\n\nSee docs/api/api-reference.md for the full specification.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000/api/v1" },
+    { "key": "email", "value": "field.agent@demo.rebuild.test" },
+    { "key": "password", "value": "" },
+    { "key": "deviceId", "value": "android-postman-0001" },
+    { "key": "token", "value": "" },
+    { "key": "tokenId", "value": "" },
+    { "key": "userId", "value": "" },
+    { "key": "idempotencyKey", "value": "" },
+    { "key": "assessmentClientUuid", "value": "" },
+    { "key": "beneficiaryClientUuid", "value": "" },
+    { "key": "imageClientUuid", "value": "" },
+    { "key": "lastBatchBody", "value": "" },
+    { "key": "batchId", "value": "" },
+    { "key": "samplePngBase64", "value": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" },
+    { "key": "samplePngSha256", "value": "497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581" },
+    { "key": "samplePngSize", "value": "70" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (field device)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json().data;",
+                  "pm.collectionVariables.set('token', data.access_token);",
+                  "pm.collectionVariables.set('userId', data.user.id);",
+                  "pm.test('field abilities only', () => pm.expect(data.abilities).to.not.include('users:manage'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"client_type\": \"field_device\",\n  \"device_name\": \"Postman field client\",\n  \"device_id\": \"{{deviceId}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "Issues a 30-day device-bound token. Responses: 201, 422 (validation / bad credentials), 403 (disabled or client type not allowed), 429."
+          }
+        },
+        {
+          "name": "Login (web dashboard)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('token', pm.response.json().data.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"client_type\": \"web_dashboard\",\n  \"device_name\": \"Postman dashboard client\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "Issues a 12-hour token. Only admin, coordinator, contractor and donor roles may use web_dashboard."
+          }
+        },
+        {
+          "name": "Me",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('tokenId', pm.response.json().data.token.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Refresh (rotate token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('token', pm.response.json().data.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "description": "Revokes the presented token and returns a new one (same client type and device)."
+          }
+        },
+        {
+          "name": "List my tokens",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/tokens", "host": ["{{baseUrl}}"], "path": ["auth", "tokens"] }
+          }
+        },
+        {
+          "name": "Revoke one of my tokens",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/tokens/{{tokenId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "tokens", "{{tokenId}}"]
+            },
+            "description": "204. Revoking the current token logs this collection out."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] }
+          }
+        },
+        {
+          "name": "Logout all devices",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/logout-all", "host": ["{{baseUrl}}"], "path": ["auth", "logout-all"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Administration",
+      "item": [
+        {
+          "name": "Revoke all tokens of a user",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/tokens",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}", "tokens"]
+            },
+            "description": "Requires users:manage (admin web token). 404 for users of other organizations."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sync",
+      "item": [
+        {
+          "name": "Push batch",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', crypto.randomUUID());",
+                  "pm.collectionVariables.set('beneficiaryClientUuid', crypto.randomUUID());",
+                  "pm.collectionVariables.set('assessmentClientUuid', crypto.randomUUID());",
+                  "pm.collectionVariables.set('imageClientUuid', crypto.randomUUID());",
+                  "pm.collectionVariables.set('sentAt', new Date().toISOString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('not a replay', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false'));",
+                  "const data = pm.response.json().data;",
+                  "pm.collectionVariables.set('batchId', data.batch_id);",
+                  "pm.collectionVariables.set('lastBatchBody', pm.request.body.raw.replace(/{{(\\w+)}}/g, (_, name) => pm.collectionVariables.get(name)));",
+                  "pm.test('every item acknowledged', () => pm.expect(data.acknowledged_client_uuids).to.have.lengthOf(data.counts.total));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idempotency_key\": \"{{idempotencyKey}}\",\n  \"sent_at\": \"{{sentAt}}\",\n  \"device\": { \"id\": \"{{deviceId}}\", \"platform\": \"android\", \"app_version\": \"1.4.2\" },\n  \"beneficiaries\": [\n    {\n      \"client_uuid\": \"{{beneficiaryClientUuid}}\",\n      \"revision\": 1,\n      \"full_name\": \"أحمد إبراهيم أبو شعبان\",\n      \"gender\": \"male\",\n      \"governorate\": \"khan_yunis\",\n      \"displacement_status\": \"displaced_tent\",\n      \"household_size\": 7,\n      \"children_count\": 4,\n      \"elderly_count\": 1,\n      \"vulnerability_tags\": [\"chronic_illness\"]\n    }\n  ],\n  \"assessments\": [\n    {\n      \"client_uuid\": \"{{assessmentClientUuid}}\",\n      \"revision\": 1,\n      \"beneficiary_client_uuid\": \"{{beneficiaryClientUuid}}\",\n      \"location\": { \"lat\": 31.3462, \"lng\": 34.3063, \"accuracy_m\": 6.5 },\n      \"governorate\": \"khan_yunis\",\n      \"structure_type\": \"residential_house\",\n      \"damage_tier\": \"severe\",\n      \"habitability\": \"uninhabitable\",\n      \"floors_count\": 3,\n      \"urgent_needs\": [ { \"category\": \"shelter\", \"quantity\": 1 }, { \"category\": \"water\" } ],\n      \"assessed_at\": \"{{sentAt}}\"\n    }\n  ],\n  \"images\": [\n    {\n      \"client_uuid\": \"{{imageClientUuid}}\",\n      \"assessment_client_uuid\": \"{{assessmentClientUuid}}\",\n      \"sha256\": \"{{samplePngSha256}}\",\n      \"mime_type\": \"image/png\",\n      \"size_bytes\": {{samplePngSize}}\n    }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/sync/batch", "host": ["{{baseUrl}}"], "path": ["sync", "batch"] },
+            "description": "Ingests a beneficiary, a linked assessment and image metadata. The image binary is uploaded separately (it appears in images_awaiting_upload). Requires a field_device token whose device_id equals {{deviceId}}."
+          }
+        },
+        {
+          "name": "Replay last batch (idempotent retry)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK replay', () => pm.response.to.have.status(200));",
+                  "pm.test('replayed header', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));",
+                  "pm.test('same batch', () => pm.expect(pm.response.json().data.batch_id).to.eql(pm.collectionVariables.get('batchId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{{lastBatchBody}}" },
+            "url": { "raw": "{{baseUrl}}/sync/batch", "host": ["{{baseUrl}}"], "path": ["sync", "batch"] },
+            "description": "Resends the byte-identical body of the last pushed batch, simulating a device that lost the first response."
+          }
+        },
+        {
+          "name": "Batch status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sync/batches/{{batchId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sync", "batches", "{{batchId}}"]
+            }
+          }
+        },
+        {
+          "name": "Upload image content",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Postman cannot send raw binary from a variable; select a PNG file in the Body tab",
+                  "// whose sha256 and size match the declared metadata, or declare your own file's",
+                  "// sha256/size in the Push batch request."
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "image/png" }],
+            "body": { "mode": "file", "file": { "src": "" } },
+            "url": {
+              "raw": "{{baseUrl}}/sync/images/{{imageClientUuid}}/content",
+              "host": ["{{baseUrl}}"],
+              "path": ["sync", "images", "{{imageClientUuid}}", "content"]
+            },
+            "description": "Raw image bytes. 201 stored, 200 already stored, 404 unknown image, 413 too large, 422 hash/size/type mismatch, 503 storage unavailable."
+          }
+        },
+        {
+          "name": "Push batch with inline image",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', crypto.randomUUID());",
+                  "pm.collectionVariables.set('assessmentClientUuid', crypto.randomUUID());",
+                  "pm.collectionVariables.set('imageClientUuid', crypto.randomUUID());",
+                  "pm.collectionVariables.set('sentAt', new Date().toISOString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('nothing awaiting upload', () => pm.expect(pm.response.json().data.images_awaiting_upload).to.be.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idempotency_key\": \"{{idempotencyKey}}\",\n  \"sent_at\": \"{{sentAt}}\",\n  \"device\": { \"id\": \"{{deviceId}}\", \"platform\": \"android\" },\n  \"assessments\": [\n    {\n      \"client_uuid\": \"{{assessmentClientUuid}}\",\n      \"revision\": 1,\n      \"location\": { \"lat\": 31.5017, \"lng\": 34.4668 },\n      \"structure_type\": \"apartment_building\",\n      \"damage_tier\": \"destroyed\",\n      \"habitability\": \"uninhabitable\",\n      \"assessed_at\": \"{{sentAt}}\"\n    }\n  ],\n  \"images\": [\n    {\n      \"client_uuid\": \"{{imageClientUuid}}\",\n      \"assessment_client_uuid\": \"{{assessmentClientUuid}}\",\n      \"sha256\": \"{{samplePngSha256}}\",\n      \"mime_type\": \"image/png\",\n      \"size_bytes\": {{samplePngSize}},\n      \"content_base64\": \"{{samplePngBase64}}\"\n    }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/sync/batch", "host": ["{{baseUrl}}"], "path": ["sync", "batch"] }
+          }
+        }
+      ]
+    }
+  ]
+}

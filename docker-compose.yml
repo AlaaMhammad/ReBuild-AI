@@ -35,10 +35,13 @@ services:
       timeout: 3s
       retries: 20
 
-  app:
+  # Shared base for the PHP image. `docker compose run --rm app <cmd>` runs any
+  # artisan / composer / phpunit command from the project root.
+  app: &php
     build:
       context: ./backend
       dockerfile: docker/php/Dockerfile
+    image: rebuild-ai-app
     working_dir: /var/www/html
     volumes:
       - ./backend:/var/www/html
@@ -50,14 +53,36 @@ services:
       DB_USERNAME: rebuild
       DB_PASSWORD: ${DB_PASSWORD:-rebuild-local-only}
       REDIS_HOST: redis
-    ports:
-      - "${APP_PORT:-8000}:8000"
-    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+      REDIS_PORT: 6379
+    command: ["php", "artisan", "about"]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # HTTP API on http://localhost:${APP_PORT}. Uses PHP's built-in server
+  # directly: `artisan serve` does not pass container environment variables
+  # (DB_HOST, REDIS_HOST, ...) to its worker processes. Laravel's router
+  # script resolves public/ from the working directory.
+  api:
+    <<: *php
+    working_dir: /var/www/html/public
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    command: ["php", "-S", "0.0.0.0:8000", "../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php"]
+
+  # Queue workers for the "sync" and "media" queues (config/horizon.php).
+  horizon:
+    <<: *php
+    command: ["php", "artisan", "horizon"]
+    profiles: ["workers"]
+
+  # Runs routes/console.php schedules (token pruning, stale-sync recovery).
+  scheduler:
+    <<: *php
+    command: ["php", "artisan", "schedule:work"]
+    profiles: ["workers"]
 
 volumes:
   postgres-data:

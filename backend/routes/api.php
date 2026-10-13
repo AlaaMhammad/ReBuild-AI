@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\TokenAbility;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Auth\TokenController;
+use App\Http\Controllers\Api\V1\SyncController;
 use App\Http\Controllers\Api\V1\UserTokenController;
 use Illuminate\Support\Facades\Route;
 
@@ -44,5 +45,23 @@ Route::prefix('v1')->name('api.v1.')->group(function (): void {
             ->middleware('abilities:'.TokenAbility::UsersManage->value)
             ->whereUuid('user')
             ->name('users.tokens.destroy');
+
+        Route::prefix('sync')->name('sync.')->group(function (): void {
+            // Per-section abilities (beneficiaries:write, assessments:write,
+            // images:upload) and device binding are enforced by BatchSyncRequest.
+            Route::post('batch', [SyncController::class, 'storeBatch'])
+                ->middleware('abilities:'.TokenAbility::SyncPush->value)
+                ->name('batch.store');
+
+            Route::get('batches/{syncBatch}', [SyncController::class, 'showBatch'])
+                ->middleware('ability:'.TokenAbility::SyncPush->value.','.TokenAbility::AuditRead->value)
+                ->whereUuid('syncBatch')
+                ->name('batch.show');
+
+            Route::put('images/{clientUuid}/content', [SyncController::class, 'uploadImageContent'])
+                ->middleware('abilities:'.TokenAbility::ImagesUpload->value)
+                ->whereUuid('clientUuid')
+                ->name('images.content');
+        });
     });
 });

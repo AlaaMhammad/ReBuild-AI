@@ -10,3 +10,12 @@ Schedule::command('sanctum:prune-expired', ['--hours' => 24])
     ->daily()
     ->onOneServer()
     ->withoutOverlapping();
+
+// Recovers batch/image post-processing lost to worker crashes or queue loss.
+Schedule::command('rebuild:sync:recover-stale', ['--minutes' => 15])
+    ->everyTenMinutes()
+    ->onOneServer()
+    ->withoutOverlapping();
+
+// Horizon dashboard metrics.
+Schedule::command('horizon:snapshot')->everyFiveMinutes();

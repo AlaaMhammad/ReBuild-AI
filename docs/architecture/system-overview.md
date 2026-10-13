@@ -2,7 +2,7 @@
 
 ReBuild AI coordinates field damage surveys, relief delivery and reconstruction tracking across multiple humanitarian organizations working in the Gaza Strip. It is designed for an environment where connectivity is intermittent for days at a time, power is unreliable, and field devices are regularly lost or seized.
 
-This document describes the architecture established in **Phase 1** (foundation, data layer, authentication) and the design contracts later phases build on. Sections marked **(Phase 2+)** describe behaviour that is designed here but implemented later.
+This document describes the architecture established in **Phase 1** (foundation, data layer, authentication) and **Phase 2** (offline sync engine and queues), and the contracts later phases build on. Behaviour marked **Phase 3** or **Phase 4** is designed here but implemented later.
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 
     subgraph Platform["ReBuild AI platform"]
         API["Laravel 12 API<br/>/api/v1"]
-        Q["Queue workers<br/>(Laravel Horizon, Phase 2)"]
+        Q["Queue workers<br/>(Laravel Horizon: sync · media)"]
         PG[("PostgreSQL 16<br/>PostGIS 3.4 · pg_trgm")]
         R[("Redis 7<br/>cache · locks · queues")]
         S3[("Object storage<br/>assessment images")]
@@ -55,8 +55,8 @@ flowchart LR
 |---|---|---|
 | Laravel 12 API (`backend/`) | Authentication, RBAC, tenant isolation, sync ingestion, triage APIs | Phase 1: auth + data layer |
 | PostgreSQL + PostGIS | System of record; spatial indexing; constraint enforcement | Phase 1 |
-| Redis | Cache, rate-limit counters, idempotency locks, queues | Phase 1 config; locks/queues Phase 2 |
-| Horizon workers | Image verification, deduplication, priority scoring | Phase 2–3 |
+| Redis | Cache, rate-limit counters, idempotency locks, queues | Phase 1–2 |
+| Horizon workers | Batch finalisation and image indexing (Phase 2); deduplication, priority scoring (Phase 3) | Phase 2 |
 | Flutter field app | Offline capture, local queue, batch sync | Separate track |
 | Next.js dashboard | Triage, GIS dashboards, reconstruction tracking | Separate track |
 
@@ -128,7 +128,7 @@ When **no** tenant is active (console commands, system jobs), queries are not fi
 | Server identity | Server assigns its own UUIDv7 primary key (`id`), time-ordered for index locality. |
 | Idempotent upsert | `UNIQUE (organization_id, client_uuid)` on `beneficiaries`, `damage_assessments`, `assessment_images`. |
 | Why not use `client_uuid` as the primary key? | The server must own identity: a malicious or buggy client could otherwise choose an ID that collides with (and probe or overwrite) another tenant's record. Scoping the uniqueness to the organization makes cross-tenant collisions impossible by construction. |
-| Linking related records offline | Payloads reference parents by `client_uuid`; the sync engine resolves them to server `id`s inside the batch transaction (Phase 2). |
+| Linking related records offline | Payloads reference parents by `client_uuid` (`beneficiary_client_uuid`, `assessment_client_uuid`); the sync engine resolves them to server `id`s inside the batch transaction, from the same batch or earlier ones. |
 
 ### 4.2 Batch lifecycle
 
@@ -153,15 +153,18 @@ stateDiagram-v2
 ```
 
 1. **Capture** – the field app writes the record to local storage with a `client_uuid`, device timestamps (`assessed_at`, `client_created_at`, `client_updated_at`) and a local `revision` counter.
-2. **Batching** – queued records are grouped into a batch with a device-generated **idempotency key** (UUID) and a SHA-256 **payload hash**.
-3. **Submission (Phase 2)** – `POST /api/v1/sync/batch` with a field-device token carrying `sync:push`.
-4. **Idempotency (Phase 2)** – the server takes a Redis lock on `(organization_id, idempotency_key)` and checks `sync_batches`:
-   - key unseen → create a `sync_batches` row (`received`) and ingest;
-   - key seen with the **same** `payload_hash` → return the stored result (a safe retry after a dropped response);
-   - key seen with a **different** `payload_hash` → reject with `409 Conflict` (client bug; never silently merged).
-5. **Ingestion (Phase 2)** – one database transaction upserts records by `(organization_id, client_uuid)`, resolves parent references, and stores the batch's counters and `result_summary` (lists of synced/failed `client_uuid`s).
-6. **Acknowledgement** – the response lists the synced `client_uuid`s; only these are marked synced on the device. Unlisted records stay queued.
-7. **Background work (Phase 2–3)** – `ProcessSyncBatchJob` (Horizon) handles image verification, deduplication and priority scoring.
+2. **Batching** – queued records are grouped into a batch with a device-generated **idempotency key** (UUID). The body is serialised once and stored on the device, so every retry is byte-identical.
+3. **Submission** – `POST /api/v1/sync/batch` with a field-device token carrying `sync:push` (plus the write ability of each section); `device.id` must match the token's device.
+4. **Idempotency** (`SyncBatchService`) – the server takes a cache lock on `(organization_id, idempotency_key)`, hashes the raw body (SHA-256) and checks `sync_batches`:
+   - key unseen → ingest and record the batch;
+   - key seen with the **same** payload hash → `200` replay of the stored acknowledgement (a safe retry after a dropped response);
+   - key seen with a **different** payload hash → `422 idempotency_key_reused` (client bug; never silently merged);
+   - lock held by an in-flight attempt → `409 sync_in_progress` with `Retry-After`.
+5. **Ingestion** (`SyncBatchIngestor`) – one database transaction creates the `sync_batches` row and upserts beneficiaries → assessments → images by `(organization_id, client_uuid)`, each item in its own savepoint, resolving parent references by `client_uuid`. Per-item outcome: `created`, `updated`, `skipped` (with reason) or `failed` (with code and `retryable`).
+6. **Acknowledgement** – the `201` response lists `acknowledged_client_uuids` (created + updated + skipped) and an `id_map`; only these are marked synced on the device. Failed items stay queued when `retryable`.
+7. **Background work** – `ProcessSyncBatchJob` (Horizon `sync` queue, dispatched after commit) indexes inline images and moves the batch to `completed` / `partially_failed` / `failed`. Phase 3 adds deduplication and priority scoring here.
+
+Full protocol: [api-reference.md §4](../api/api-reference.md#4-offline-sync). Failure modes: [chaos-and-offline.md](../testing/chaos-and-offline.md).
 
 The `UNIQUE (organization_id, idempotency_key)` constraint on `sync_batches` is the durable backstop for the Redis lock: even if Redis is flushed mid-flight, two concurrent submissions of the same batch cannot both be recorded.
 
@@ -185,7 +188,11 @@ A database `CHECK` guarantees that any row in `uploaded`, `processing` or `proce
 
 ### 4.5 Clock drift
 
-Device timestamps are never used for server ordering or security decisions. Each batch records `client_sent_at` and `received_at`; `clock_skew_seconds = received_at − client_sent_at` (positive when the device clock is behind). Phase 2 uses the skew to flag implausible `assessed_at` values instead of rewriting them.
+Device timestamps are never used for server ordering, conflict resolution (that is `revision`'s job) or security decisions. Each batch records `client_sent_at` and `received_at`; `clock_skew_seconds = received_at − client_sent_at` (positive when the device clock is behind). `App\Services\Sync\DeviceClock` then:
+
+1. converts every device timestamp to UTC using its offset;
+2. when `|skew|` exceeds 300 s, shifts all of the batch's device timestamps by the skew (`clock.corrected = true` in the response);
+3. clamps any timestamp still later than the receive time (plus tolerance) to the receive time, reporting a `<field>_clamped` warning.
 
 ### 4.6 Authentication while offline
 

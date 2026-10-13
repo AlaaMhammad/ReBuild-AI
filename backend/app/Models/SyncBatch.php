@@ -161,6 +161,24 @@ class SyncBatch extends Model
     }
 
     /**
+     * Final status once post-processing is done, derived from item outcomes:
+     * no failures → completed; nothing stored or acknowledged → failed;
+     * otherwise partially_failed.
+     */
+    public function resolveTerminalStatus(): SyncBatchStatus
+    {
+        if ($this->failed_count === 0) {
+            return SyncBatchStatus::Completed;
+        }
+
+        if ($this->created_count + $this->updated_count + $this->skipped_count === 0) {
+            return SyncBatchStatus::Failed;
+        }
+
+        return SyncBatchStatus::PartiallyFailed;
+    }
+
+    /**
      * Whether the stored batch was produced from the same payload, i.e. a
      * safe retry rather than an idempotency-key collision.
      */

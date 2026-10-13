@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Exceptions\Sync\IdempotencyKeyReusedException;
+use App\Exceptions\Sync\SyncBatchInProgressException;
 use App\Http\Middleware\ForceJsonResponse;
 use App\Http\Middleware\SetTenantContext;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
@@ -38,4 +40,10 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $exceptions->dontFlash(['password', 'password_confirmation', 'national_id']);
+
+        // Expected client-retry outcomes of the sync protocol, not server errors.
+        $exceptions->dontReport([
+            SyncBatchInProgressException::class,
+            IdempotencyKeyReusedException::class,
+        ]);
     })->create();
